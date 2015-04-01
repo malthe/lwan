@@ -41,22 +41,22 @@ static const uint32_t events_by_write_flag[] = {
     EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET
 };
 
-static inline int death_queue_node_to_idx(struct death_queue_t *dq,
+static inline unsigned int death_queue_node_to_idx(struct death_queue_t *dq,
     lwan_connection_t *conn)
 {
-    return (conn == &dq->head) ? -1 : (int)(ptrdiff_t)(conn - dq->conns);
+    return (conn == &dq->head) ? 0 : (unsigned int)(ptrdiff_t)(conn - dq->conns) + 1;
 }
 
 static inline lwan_connection_t *death_queue_idx_to_node(struct death_queue_t *dq,
-    int idx)
+    unsigned int idx)
 {
-    return (idx < 0) ? &dq->head : &dq->conns[idx];
+    return (idx) ? &dq->conns[idx - 1] : &dq->head;
 }
 
 static void death_queue_insert(struct death_queue_t *dq,
     lwan_connection_t *new_node)
 {
-    new_node->next = -1;
+    new_node->next = 0;
     new_node->prev = dq->head.prev;
     lwan_connection_t *prev = death_queue_idx_to_node(dq, dq->head.prev);
     dq->head.prev = prev->next = death_queue_node_to_idx(dq, new_node);
@@ -73,7 +73,7 @@ static void death_queue_remove(struct death_queue_t *dq,
 
 static bool death_queue_empty(struct death_queue_t *dq)
 {
-    return dq->head.next < 0;
+    return !dq->head.next;
 }
 
 static void death_queue_move_to_last(struct death_queue_t *dq,
@@ -101,7 +101,7 @@ death_queue_init(struct death_queue_t *dq, lwan_connection_t *conns,
     dq->conns = conns;
     dq->time = 0;
     dq->keep_alive_timeout = keep_alive_timeout;
-    dq->head.next = dq->head.prev = -1;
+    dq->head.next = dq->head.prev = 0;
 }
 
 static ALWAYS_INLINE int
