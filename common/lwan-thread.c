@@ -79,17 +79,6 @@ static bool death_queue_empty(struct death_queue_t *dq)
 static void death_queue_move_to_last(struct death_queue_t *dq,
     lwan_connection_t *conn)
 {
-    /*
-     * If the connection isn't keep alive, it might have a coroutine that
-     * should be resumed.  If that's the case, schedule for this request to
-     * die according to the keep alive timeout.
-     *
-     * If it's not a keep alive connection, or the coroutine shouldn't be
-     * resumed -- then just mark it to be reaped right away.
-     */
-    conn->time_to_die = dq->time + dq->keep_alive_timeout *
-            (unsigned)!!(conn->flags & (CONN_KEEP_ALIVE | CONN_SHOULD_RESUME_CORO));
-
     death_queue_remove(dq, conn);
     death_queue_insert(dq, conn);
 }
@@ -215,21 +204,19 @@ resume_coro_if_needed(struct death_queue_t *dq, lwan_connection_t *conn,
 }
 
 static void
-death_queue_kill_waiting(struct death_queue_t *dq)
+death_queue_kill_waiting(struct death_queue_t *dq, time_t time)
 {
-    dq->time++;
+    unsigned short timeout = dq->keep_alive_timeout;
+    bool keep_alive;
 
     while (!death_queue_empty(dq)) {
         lwan_connection_t *conn = death_queue_idx_to_node(dq, dq->head.next);
-
-        if (conn->time_to_die > dq->time)
+        keep_alive = conn->flags & (CONN_KEEP_ALIVE | CONN_SHOULD_RESUME_CORO);
+        if (conn->time + conn->tick + timeout * (unsigned)!!(keep_alive) > time)
             return;
 
         destroy_coro(dq, conn);
     }
-
-    /* Death queue exhausted: reset epoch */
-    dq->time = 0;
 }
 
 void
@@ -306,6 +293,7 @@ thread_io_loop(void *data)
     struct death_queue_t dq;
     int epoll_fd = t->epoll_fd;
     int n_fds;
+    time_t elapsed, start = time(NULL);
     const int max_events = min((int)t->lwan->thread.max_fd, 1024);
 
     lwan_status_debug("Starting IO loop on thread #%d", t->id + 1);
@@ -327,7 +315,7 @@ thread_io_loop(void *data)
             }
             continue;
         case 0: /* timeout: shutdown waiting sockets */
-            death_queue_kill_waiting(&dq);
+            death_queue_kill_waiting(&dq, t->date.last - start);
             break;
         default: /* activity in some of this poller's file descriptor */
             update_date_cache(t);
@@ -339,6 +327,7 @@ thread_io_loop(void *data)
                     conn = grab_and_watch_client(t, conns);
                     if (UNLIKELY(!conn))
                         continue;
+                    conn->time = (unsigned int) (t->date.last - start);
                     spawn_or_reset_coro_if_needed(conn, &switcher, &dq);
                 } else {
                     conn = ep_event->data.ptr;
@@ -351,6 +340,8 @@ thread_io_loop(void *data)
                     resume_coro_if_needed(&dq, conn, epoll_fd);
                 }
 
+                elapsed = (time_t) t->date.last - conn->time - start;
+                conn->tick = (unsigned int) elapsed && 1 << 26;
                 death_queue_move_to_last(&dq, conn);
             }
         }
