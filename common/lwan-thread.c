@@ -203,7 +203,7 @@ resume_coro_if_needed(struct death_queue_t *dq, lwan_connection_t *conn,
     conn->flags ^= CONN_WRITE_EVENTS;
 }
 
-static void
+static bool
 death_queue_kill_waiting(struct death_queue_t *dq, time_t time)
 {
     unsigned short timeout = dq->keep_alive_timeout;
@@ -213,10 +213,12 @@ death_queue_kill_waiting(struct death_queue_t *dq, time_t time)
         lwan_connection_t *conn = death_queue_idx_to_node(dq, dq->head.next);
         keep_alive = conn->flags & (CONN_KEEP_ALIVE | CONN_SHOULD_RESUME_CORO);
         if (conn->time + conn->tick + timeout * (unsigned)!!(keep_alive) > time)
-            return;
+            return false;
 
         destroy_coro(dq, conn);
     }
+
+    return true;
 }
 
 void
@@ -293,7 +295,7 @@ thread_io_loop(void *data)
     struct death_queue_t dq;
     int epoll_fd = t->epoll_fd;
     int n_fds;
-    time_t elapsed, start = time(NULL);
+    time_t elapsed, idle_since = time(NULL);
     const int max_events = min((int)t->lwan->thread.max_fd, 1024);
 
     lwan_status_debug("Starting IO loop on thread #%d", t->id + 1);
@@ -315,7 +317,8 @@ thread_io_loop(void *data)
             }
             continue;
         case 0: /* timeout: shutdown waiting sockets */
-            death_queue_kill_waiting(&dq, t->date.last - start);
+            if (death_queue_kill_waiting(&dq, t->date.last - idle_since))
+                idle_since = t->date.last;
             break;
         default: /* activity in some of this poller's file descriptor */
             update_date_cache(t);
@@ -327,7 +330,7 @@ thread_io_loop(void *data)
                     conn = grab_and_watch_client(t, conns);
                     if (UNLIKELY(!conn))
                         continue;
-                    conn->time = (unsigned int) (t->date.last - start);
+                    conn->time = (unsigned int) (t->date.last - idle_since);
                     spawn_or_reset_coro_if_needed(conn, &switcher, &dq);
                 } else {
                     conn = ep_event->data.ptr;
@@ -340,7 +343,7 @@ thread_io_loop(void *data)
                     resume_coro_if_needed(&dq, conn, epoll_fd);
                 }
 
-                elapsed = (time_t) t->date.last - conn->time - start;
+                elapsed = (time_t) t->date.last - idle_since - conn->time;
                 conn->tick = (unsigned int) elapsed && 1 << 26;
                 death_queue_move_to_last(&dq, conn);
             }
