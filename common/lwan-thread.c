@@ -151,6 +151,8 @@ process_request_coro(coro_t *coro)
         .len = 0
     };
     char *next_request = NULL;
+    lwan_proxy_t proxy;
+    bool proxied = false;
 
     strbuf_init(strbuf);
 
@@ -158,14 +160,18 @@ process_request_coro(coro_t *coro)
         lwan_request_t request = {
             .conn = conn,
             .fd = fd,
+            .flags = proxied ? REQUEST_PROXIED : 0,
             .response = {
                 .buffer = strbuf
             },
+            .proxy = &proxy
         };
 
         assert(conn->flags & CONN_IS_ALIVE);
 
         next_request = lwan_process_request(lwan, &request, &buffer, next_request);
+        proxied = request.flags & REQUEST_PROXIED;
+
         if (++i == CORO_DEFER_THRESHOLD) {
             coro_run_deferred(coro, false);
             i = 0;

@@ -158,6 +158,7 @@ parse_proxy_protocol_v1(lwan_request_t *request, char *buffer)
     union proxy_protocol_header *hdr = (union proxy_protocol_header *) buffer;
     char *end, *protocol, *src_addr, *dst_addr, *src_port, *dst_port;
     unsigned int size;
+    lwan_proxy_t * const proxy = request->proxy;
 
     end = memchr(hdr->v1.line, '\r', sizeof(hdr->v1.line));
     if (UNLIKELY(!end || end[1] != '\n'))
@@ -182,8 +183,8 @@ parse_proxy_protocol_v1(lwan_request_t *request, char *buffer)
 
     STRING_SWITCH(protocol) {
     case TCP4: {
-        struct sockaddr_in *from = &request->proxy_from.ipv4;
-        struct sockaddr_in *to = &request->proxy_to.ipv4;
+        struct sockaddr_in *from = &proxy->from.ipv4;
+        struct sockaddr_in *to = &proxy->to.ipv4;
 
         from->sin_family = to->sin_family = AF_INET;
 
@@ -199,8 +200,8 @@ parse_proxy_protocol_v1(lwan_request_t *request, char *buffer)
         break;
     }
     case TCP6: {
-        struct sockaddr_in6 *from = &request->proxy_from.ipv6;
-        struct sockaddr_in6 *to = &request->proxy_to.ipv6;
+        struct sockaddr_in6 *from = &proxy->from.ipv6;
+        struct sockaddr_in6 *to = &proxy->to.ipv6;
 
         from->sin6_family = to->sin6_family = AF_INET6;
 
@@ -232,6 +233,7 @@ parse_proxy_protocol_v2(lwan_request_t *request, char *buffer)
     union proxy_protocol_header *hdr = (union proxy_protocol_header *)buffer;
     const unsigned int proto_signature_length = 16;
     unsigned int size;
+    lwan_proxy_t * const proxy = request->proxy;
 
     enum {
         LOCAL = 0,
@@ -248,14 +250,14 @@ parse_proxy_protocol_v2(lwan_request_t *request, char *buffer)
         goto no_proxy;
 
     if (hdr->v2.cmd == LOCAL) {
-        struct sockaddr_in *from = &request->proxy_from.ipv4;
-        struct sockaddr_in *to = &request->proxy_to.ipv4;
+        struct sockaddr_in *from = &proxy->from.ipv4;
+        struct sockaddr_in *to = &proxy->to.ipv4;
 
         from->sin_family = to->sin_family = AF_UNSPEC;
     } else if (hdr->v2.cmd == PROXY) {
         if (hdr->v2.fam == TCP4) {
-            struct sockaddr_in *from = &request->proxy_from.ipv4;
-            struct sockaddr_in *to = &request->proxy_to.ipv4;
+            struct sockaddr_in *from = &proxy->from.ipv4;
+            struct sockaddr_in *to = &proxy->to.ipv4;
 
             to->sin_family = from->sin_family = AF_INET;
 
@@ -265,8 +267,8 @@ parse_proxy_protocol_v2(lwan_request_t *request, char *buffer)
             to->sin_addr.s_addr = hdr->v2.addr.ip4.dst_addr;
             to->sin_port = hdr->v2.addr.ip4.dst_port;
         } else if (hdr->v2.fam == TCP6) {
-            struct sockaddr_in6 *from = &request->proxy_from.ipv6;
-            struct sockaddr_in6 *to = &request->proxy_to.ipv6;
+            struct sockaddr_in6 *from = &proxy->from.ipv6;
+            struct sockaddr_in6 *to = &proxy->to.ipv6;
 
             from->sin6_family = to->sin6_family = AF_INET6;
 
@@ -1116,7 +1118,7 @@ lwan_request_get_remote_address(lwan_request_t *request,
     struct sockaddr_storage *sock_addr;
 
     if (request->flags & REQUEST_PROXIED) {
-        sock_addr = (struct sockaddr_storage *)&request->proxy_from;
+        sock_addr = (struct sockaddr_storage *)&request->proxy->from;
     } else {
         socklen_t sock_len = sizeof(non_proxied_addr);
 
